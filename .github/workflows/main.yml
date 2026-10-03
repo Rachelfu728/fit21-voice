@@ -14,10 +14,10 @@ jobs:
       - name: 下載專案檔案
         uses: actions/checkout@v4
 
-      - name: 解壓縮專案
+      - name: 解壓縮專案並修復相容性
         run: |
           python3 -c "import zipfile; zipfile.ZipFile('fit21-voice-app.zip').extractall('.')" || tar -xf fit21-voice-app.zip || unzip -o fit21-voice-app.zip || true
-          python3 -c "p='lib/services/speech_service.dart'; lines=[l for l in open(p) if not any(k in l for k in ['setIosAudioCategory','ambientSolo','defaultToSpeaker','allowBluetooth','IosTextToSpeech'])]; open(p,'w').writelines(lines)" || true
+          python3 -c "import re; p='lib/services/speech_service.dart'; s=open(p).read(); s=re.sub(r'// iOS[\s\S]*?\);', '', s); s=re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s); open(p,'w').write(s)" || true
 
       - name: 設定 Java 環境
         uses: actions/setup-java@v4
@@ -30,12 +30,20 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: 重建標準 Android 架構
+      - name: 重建標準 Android 架構與相容設定
         run: |
           rm -rf android
           flutter create --platforms=android --org com.example .
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' android/app/build.gradle* 2>/dev/null || true
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* 2>/dev/null || true
+          python3 -c "
+          p = 'android/app/build.gradle'
+          c = open(p).read()
+          c = c.replace('minSdk = flutter.minSdkVersion', 'minSdk = 23')
+          c = c.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 23')
+          if 'coreLibraryDesugaringEnabled' not in c:
+              c = c.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true')
+              c += '\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.0.4\"\n}\n'
+          open(p, 'w').write(c)
+          " || true
           sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />' android/app/src/main/AndroidManifest.xml || true
           python3 -c "import shutil, glob, os; [shutil.copy('assets/images/app_logo.png', os.path.join(d, 'ic_launcher.png')) for d in glob.glob('android/app/src/main/res/mipmap-*')]" || true
 
@@ -43,7 +51,8 @@ jobs:
         run: flutter pub get
 
       - name: 打包 Android 安裝檔 (APK)
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release --verbose > build.log 2>&1 || (cat build.log | tail -n 80 && exit 1)
 
       - name: 產出可下載的 APK 安裝檔
         uses: actions/upload-artifact@v4
