@@ -1,0 +1,42 @@
+name: Build Fit21 APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下載專案檔案
+        uses: actions/checkout@v4
+
+      - name: 解壓縮專案
+        run: |
+          unzip -o fit21-voice-app.zip
+          chmod +x android/gradlew 2>/dev/null || true
+
+      - name: 設定 Java 環境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 設定 Flutter 環境
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 下載依賴套件
+        run: flutter pub get
+
+      - name: 打包 Android 安裝檔 (APK)
+        run: flutter build apk --release
+
+      - name: 產出可下載的 APK 安裝檔
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fit21-語音助理-安裝檔
+          path: build/app/outputs/flutter-apk/app-release.apk
