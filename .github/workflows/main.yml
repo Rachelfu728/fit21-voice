@@ -27,15 +27,15 @@ jobs:
 
       - name: 解壓縮專案並修復相容性
         run: |
-          7z x fit21-voice-app.zip -y || unzip -o fit21-voice-app.zip || true
-          sed -i '/setIosAudioCategory/,/);/d' lib/services/speech_service.dart || true
+          python3 -c "import os, zipfile, re; z=zipfile.ZipFile('fit21-voice-app.zip'); [open(p, 'wb').write(z.read(m)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and (os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else True)]; open('lib/services/speech_service.dart', 'w').write(re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', open('lib/services/speech_service.dart').read())) if os.path.exists('lib/services/speech_service.dart') else None"
 
       - name: 重建 Android 環境並配置
         run: |
-          mkdir -p /tmp/bak && cp -r lib pubspec.yaml /tmp/bak/
+          mkdir -p /tmp/bak && cp -r lib pubspec.yaml /tmp/bak/ || true
           rm -rf android
           flutter create --platforms=android --org com.example --project-name voice_reminder_assistant .
-          cp -rf /tmp/bak/lib/* lib/ && cp -f /tmp/bak/pubspec.yaml pubspec.yaml
+          cp -rf /tmp/bak/lib/* lib/ 2>/dev/null || true
+          cp -f /tmp/bak/pubspec.yaml pubspec.yaml || true
           echo "flutter.minSdkVersion=26" >> android/local.properties || true
           python3 -c "p='android/app/build.gradle'; s=open(p).read(); s=s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26'); s=s.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true') if 'coreLibraryDesugaring' not in s else s; s+='\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'coreLibraryDesugaring' not in s else ''; open(p,'w').write(s)" || true
           python3 -c "p='android/app/src/main/AndroidManifest.xml'; s=open(p).read(); perms='<uses-permission android:name=\"android.permission.INTERNET\"/>\n<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n<uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.USE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>\n<uses-permission android:name=\"android.permission.VIBRATE\"/>\n<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>'; open(p,'w').write(s.replace('<application', perms+'\n<application')) if 'RECORD_AUDIO' not in s else None" || true
