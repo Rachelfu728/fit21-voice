@@ -34,7 +34,10 @@ jobs:
       - name: 解壓 Fit21 應用程式源碼並修復相容性
         run: |
           python3 -c "import os, zipfile; z=zipfile.ZipFile('fit21-voice-app.zip'); [(os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None, open(p, 'wb').write(z.read(m)), print('Extracted:', p)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and not p.startswith('android/')]"
-          python3 -c "p='lib/main.dart'; s=open(p).read().replace('cardTheme: CardTheme(', 'cardTheme: CardThemeData('); open(p,'w').write(s); print('Patched main.dart CardThemeData')"
+          python3 -c "p='lib/main.dart'; s=open(p).read().replace('cardTheme: CardTheme(', 'cardTheme: CardThemeData(').replace('void main() async {', 'void main() {').replace('await StorageService().init();', '').replace('await NotificationService().init();', '').replace('await SpeechService().init();', ''); open(p,'w').write(s); print('Patched main.dart')"
+          python3 -c "p='lib/services/storage_service.dart'; s=open(p).read().replace('prefs.getStringList', '_prefs?.getStringList'); open(p,'w').write(s); print('Patched storage_service.dart')"
+          python3 -c "p='lib/screens/home_screen.dart'; s=open(p).read(); s=s.replace(\"import '../services/storage_service.dart';\", \"import '../services/speech_service.dart';\nimport '../services/storage_service.dart';\"); s=s.replace('void initState() {\n    super.initState();\n    _loadData();\n  }', 'void initState() {\n    super.initState();\n    _loadData();\n    Future.microtask(() async { try { await _storage.init(); if (mounted) _loadData(); } catch(_) {} try { await _notifications.init(); } catch(_) {} try { await SpeechService().init(); } catch(_) {} });\n  }'); open(p,'w').write(s); print('Patched home_screen.dart')"
+          python3 -c "p='lib/services/notification_service.dart'; s=open(p).read().replace('await androidImpl.requestExactAlarmsPermission();', ''); open(p,'w').write(s); print('Patched notification_service.dart')"
           python3 -c "import re; p='lib/services/speech_service.dart'; s=open(p).read(); s=re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s); s=s.replace('partialResults: true,', '').replace('cancelOnError: false,', ''); s=re.sub(r'listenMode:\s*stt\.ListenMode\.\w+,?', '', s); open(p,'w').write(s); print('Patched speech_service.dart')"
 
       - name: 配置 Android 權限與建置參數
@@ -43,7 +46,8 @@ jobs:
           python3 -c "import os; p='android/app/build.gradle' if os.path.exists('android/app/build.gradle') else ('android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else ''); s=open(p).read() if p else ''; (open(p,'w').write(s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdkVersion = flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26').replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true' if 'kts' not in p else 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true') + ('\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'kts' not in p else '\ndependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.4\")\n}\n')), print('Patched gradle:', p)) if p else None" || true
           python3 -c "p='android/app/src/main/AndroidManifest.xml'; s=open(p).read(); perms='    <uses-permission android:name=\"android.permission.INTERNET\"/>\n    <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n    <uses-permission android:name=\"android.permission.USE_EXACT_ALARM\"/>\n    <uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>\n    <uses-permission android:name=\"android.permission.VIBRATE\"/>\n    <uses-permission android:name=\"android.permission.WAKE_LOCK\"/>'; s=s.replace('<application', perms+'\n    <application') if 'RECORD_AUDIO' not in s else s; s=s.replace('android:label=\"voice_reminder_assistant\"', 'android:label=\"Fit21\"'); open(p,'w').write(s); print('Patched AndroidManifest.xml')" || true
           sed -i 's/android:label="[^"]*"/android:label="Fit21"/g' android/app/src/main/AndroidManifest.xml || true
-          which convert && convert assets/images/app_logo.png -resize 192x192 png32:/tmp/logo.png 2>/dev/null && [ -f /tmp/logo.png ] && for d in android/app/src/main/res/mipmap-*; do cp /tmp/logo.png "$d/ic_launcher.png" 2>/dev/null || true; done || true
+          pip install Pillow || true
+          python3 -c "from PIL import Image; im=Image.open('assets/images/app_logo.png').convert('RGBA').resize((192,192)); [im.save(f'android/app/src/main/res/{d}/ic_launcher.png', 'PNG') for d in ['mipmap-mdpi','mipmap-hdpi','mipmap-xhdpi','mipmap-xxhdpi','mipmap-xxxhdpi']]; print('Green robot launcher icon created successfully!')" || true
 
       - name: 下載依賴並打包 APK
         run: |
@@ -60,9 +64,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         continue-on-error: true
         with:
-          tag_name: v1.0.0
-          name: "Fit21 語音提醒助理 v1.0.0"
-          body: "Fit21 AI 語音提醒助理 Android 安裝檔。點擊下方 app-release.apk 即可下載並安裝到手機！"
+          tag_name: v1.0.1
+          name: "Fit21 語音提醒助理 v1.0.1"
+          body: "Fit21 AI 語音提醒助理 Android 安裝檔。修正啟動畫面即時載入與綠色機器人專屬圖示。"
           files: build/app/outputs/flutter-apk/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
