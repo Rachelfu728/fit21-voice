@@ -14,8 +14,8 @@ jobs:
 
       - name: 解壓縮專案
         run: |
-          unzip -o fit21-voice-app.zip
-          chmod +x android/gradlew 2>/dev/null || true
+          python3 -c "import zipfile; zipfile.ZipFile('fit21-voice-app.zip').extractall('.')" || tar -xf fit21-voice-app.zip || unzip -o fit21-voice-app.zip || true
+          ls -la
 
       - name: 設定 Java 環境
         uses: actions/setup-java@v4
@@ -27,7 +27,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true
 
       - name: 下載依賴套件
         run: flutter pub get
