@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: 下載專案檔案
         uses: actions/checkout@v4
@@ -15,7 +17,6 @@ jobs:
       - name: 解壓縮專案
         run: |
           python3 -c "import zipfile; zipfile.ZipFile('fit21-voice-app.zip').extractall('.')" || tar -xf fit21-voice-app.zip || unzip -o fit21-voice-app.zip || true
-          ls -la
 
       - name: 設定 Java 環境
         uses: actions/setup-java@v4
@@ -28,6 +29,12 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: 補全 Android 原生建置架構
+        run: |
+          cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml || true
+          flutter create --platforms=android .
+          cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml || true
+
       - name: 下載依賴套件
         run: flutter pub get
 
@@ -39,3 +46,13 @@ jobs:
         with:
           name: Fit21-語音助理-安裝檔
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: 自動發布到 Releases 下載頁面
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "Fit21 語音提醒助理 v1.0.0 (安裝包)"
+          body: "Fit21 AI 語音提醒助理 Android 安裝檔。下載下方 app-release.apk 即可安裝到手機！"
+          files: build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
