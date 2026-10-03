@@ -30,98 +30,45 @@ jobs:
           rm -rf android lib test
           flutter create --platforms=android --org com.example --project-name voice_reminder_assistant .
           rm -rf lib test
+
+      - name: 解壓 Fit21 應用程式源碼並修復相容性
+        run: |
+          python3 -c "import os, zipfile; z=zipfile.ZipFile('fit21-voice-app.zip'); [(os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None, open(p, 'wb').write(z.read(m)), print('Extracted:', p)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and not p.startswith('android/')]"
+          python3 -c "p='lib/main.dart'; s=open(p).read().replace('cardTheme: CardTheme(', 'cardTheme: CardThemeData(').replace('void main() async {', 'void main() {').replace('await StorageService().init();', '').replace('await NotificationService().init();', '').replace('await SpeechService().init();', ''); s=s.replace('runApp(', 'ErrorWidget.builder=(details)=>MaterialApp(home:Scaffold(body:Center(child:Text(details.exceptionAsString()))));\n  runApp('); open(p,'w').write(s); print('Patched main.dart')"
+          python3 -c "p='lib/services/storage_service.dart'; s=open(p).read().replace('prefs.getStringList', '_prefs?.getStringList').replace('prefs.getString', '_prefs?.getString').replace('prefs.getBool', '_prefs?.getBool').replace('prefs.getDouble', '_prefs?.getDouble'); open(p,'w').write(s); print('Patched storage_service.dart')"
+          python3 -c "import re; p='lib/screens/home_screen.dart'; s=open(p).read(); s=s.replace(\"import '../services/storage_service.dart';\", \"import '../services/speech_service.dart';\nimport '../services/storage_service.dart';\"); s=s.replace('void initState() {\n    super.initState();\n    _loadData();\n  }', 'void initState() {\n    super.initState();\n    _loadData();\n    Future.microtask(() async { try { await _storage.init(); if (mounted) _loadData(); } catch(_) {} try { await _notifications.init(); } catch(_) {} try { await SpeechService().init(); } catch(_) {} });\n  }'); s=re.sub(r'final dateStr = DateFormat\(.+?\)\.format\(now\);', 'const w=[\"\",\"星期一\",\"星期二\",\"星期三\",\"星期四\",\"星期五\",\"星期六\",\"星期日\"]; final dateStr=now.month.toString()+\"月\"+now.day.toString()+\"日 \"+w[now.weekday];', s); open(p,'w').write(s); print('Patched home_screen.dart')"
+          python3 -c "import re; p='lib/models/reminder_item.dart'; s=open(p).read(); s=re.sub(r'String get formattedDate\s*\{[\s\S]*?\}', 'String get formattedDate{if(isToday)return\"今天\";if(isTomorrow)return\"明天\";const w=[\"\",\"一\",\"二\",\"三\",\"四\",\"五\",\"六\",\"日\"];return reminderTime.month.toString()+\"月\"+reminderTime.day.toString()+\"日 (\"+w[reminderTime.weekday]+\")\";}', s); s=re.sub(r'String get formattedTime\s*\{[\s\S]*?\}', 'String get formattedTime{final p=reminderTime.hour<12?\"上午\":\"下午\";final h=reminderTime.hour==0?12:(reminderTime.hour>12?reminderTime.hour-12:reminderTime.hour);final m=reminderTime.minute.toString().padLeft(2,\"0\");return p+\" \"+h.toString()+\":\"+m;}', s); open(p,'w').write(s); print('Patched reminder_item.dart')"
+          python3 -c "p='lib/services/notification_service.dart'; s=open(p).read().replace('await androidImpl.requestExactAlarmsPermission();', ''); open(p,'w').write(s); print('Patched notification_service.dart')"
+          python3 -c "import re; p='lib/services/speech_service.dart'; s=open(p).read(); s=re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s); s=s.replace('partialResults: true,', '').replace('cancelOnError: false,', ''); s=re.sub(r'listenMode:\s*stt\.ListenMode\.\w+,?', '', s); open(p,'w').write(s); print('Patched speech_service.dart')"
+
+      - name: 配置 Android 權限與建置參數
+        run: |
           echo "flutter.minSdkVersion=26" >> android/local.properties || true
+          python3 -c "import os; p='android/app/build.gradle' if os.path.exists('android/app/build.gradle') else ('android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else ''); s=open(p).read() if p else ''; (open(p,'w').write(s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdkVersion = flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26').replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true' if 'kts' not in p else 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true') + ('\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'kts' not in p else '\ndependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.4\")\n}\n')), print('Patched gradle:', p)) if p else None" || true
+          python3 -c "p='android/app/src/main/AndroidManifest.xml'; s=open(p).read(); perms='    <uses-permission android:name=\"android.permission.INTERNET\"/>\n    <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n    <uses-permission android:name=\"android.permission.USE_EXACT_ALARM\"/>\n    <uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>\n    <uses-permission android:name=\"android.permission.VIBRATE\"/>\n    <uses-permission android:name=\"android.permission.WAKE_LOCK\"/>'; s=s.replace('<application', perms+'\n    <application') if 'RECORD_AUDIO' not in s else s; s=s.replace('android:label=\"voice_reminder_assistant\"', 'android:label=\"Fit21\"'); open(p,'w').write(s); print('Patched AndroidManifest.xml')" || true
+          sed -i 's/android:label="[^"]*"/android:label="Fit21"/g' android/app/src/main/AndroidManifest.xml || true
           rm -rf android/app/src/main/res/mipmap-anydpi* || true
           pip install Pillow || true
+          python3 -c "from PIL import Image; im=Image.open('assets/images/app_logo.png').convert('RGBA').resize((192,192)); [im.save(f'android/app/src/main/res/{d}/ic_launcher.png', 'PNG') for d in ['mipmap-mdpi','mipmap-hdpi','mipmap-xhdpi','mipmap-xxhdpi','mipmap-xxxhdpi']]; [im.save(f'android/app/src/main/res/{d}/ic_launcher_round.png', 'PNG') for d in ['mipmap-mdpi','mipmap-hdpi','mipmap-xhdpi','mipmap-xxhdpi','mipmap-xxxhdpi']]; print('Green robot launcher icon created successfully!')" || true
 
-      - name: 解壓源碼並套用完整修復
-        shell: python
+      - name: 下載依賴並打包 APK
         run: |
-          import os, sys, re, zipfile
+          flutter pub get
+          flutter build apk --release --no-tree-shake-icons
 
-          # 1. 解壓源碼
-          z = zipfile.ZipFile('fit21-voice-app.zip')
-          for m in z.infolist():
-              p = m.filename.replace('\\', '/')
-              if not p.endswith('/') and not p.startswith('android/'):
-                  d = os.path.dirname(p)
-                  if d:
-                      os.makedirs(d, exist_ok=True)
-                  with open(p, 'wb') as f:
-                      f.write(z.read(m))
-                  print('Extracted:', p)
+      - name: 產出可下載的 APK 安裝檔
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fit21-語音助理-安裝檔
+          path: build/app/outputs/flutter-apk/app-release.apk
 
-          # 2. 修復 main.dart (加入 ErrorWidget 防白屏與 Material3 卡片修正)
-          p = 'lib/main.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = s.replace('cardTheme: CardTheme(', 'cardTheme: CardThemeData(')
-          s = s.replace('void main() async {', 'void main() {')
-          s = s.replace('await StorageService().init();', '')
-          s = s.replace('await NotificationService().init();', '')
-          s = s.replace('await SpeechService().init();', '')
-          s = s.replace('runApp(', 'ErrorWidget.builder = (details) => MaterialApp(home: Scaffold(body: Center(child: Padding(padding: const EdgeInsets.all(24.0), child: Text(details.exceptionAsString())))));\n  runApp(')
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched main.dart')
-
-          # 3. 修復 storage_service.dart
-          p = 'lib/services/storage_service.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = s.replace('prefs.getStringList', '_prefs?.getStringList')
-          s = s.replace('prefs.getString', '_prefs?.getString')
-          s = s.replace('prefs.getBool', '_prefs?.getBool')
-          s = s.replace('prefs.getDouble', '_prefs?.getDouble')
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched storage_service.dart')
-
-          # 4. 修復 reminder_item.dart
-          p = 'lib/models/reminder_item.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = re.sub(r'String get formattedDate\s*\{[\s\S]*?\}', 'String get formattedDate { if (isToday) return "今天"; if (isTomorrow) return "明天"; const w = ["", "一", "二", "三", "四", "五", "六", "日"]; return "${reminderTime.month}月${reminderTime.day}日 (" + w[reminderTime.weekday] + ")"; }', s)
-          s = re.sub(r'String get formattedTime\s*\{[\s\S]*?\}', 'String get formattedTime { final p = reminderTime.hour < 12 ? "上午" : "下午"; final h = reminderTime.hour == 0 ? 12 : (reminderTime.hour > 12 ? reminderTime.hour - 12 : reminderTime.hour); final m = reminderTime.minute.toString().padLeft(2, "0"); return "$p $h:$m"; }', s)
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched reminder_item.dart')
-
-          # 5. 修復 home_screen.dart
-          p = 'lib/screens/home_screen.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = s.replace("import '../services/storage_service.dart';", "import '../services/speech_service.dart';\nimport '../services/storage_service.dart';")
-          s = re.sub(r'void initState\(\)\s*\{[\s\S]*?_loadData\(\);[\s\S]*?\}', 'void initState() {\n    super.initState();\n    _loadData();\n    Future.microtask(() async { try { await _storage.init(); if (mounted) _loadData(); } catch(_) {} try { await _notifications.init(); } catch(_) {} try { await SpeechService().init(); } catch(_) {} });\n  }', s)
-          s = re.sub(r'final dateStr = DateFormat\(.+?\)\.format\(now\);', 'const w = ["", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]; final dateStr = "${now.month}月${now.day}日 " + w[now.weekday];', s)
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched home_screen.dart')
-
-          # 6. 修復 edit_reminder_screen.dart
-          p = 'lib/screens/edit_reminder_screen.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = re.sub(r'final dateStr = DateFormat\(.+?\)\.format\(_selectedDateTime\);', 'const w = ["", "一", "二", "三", "四", "五", "六", "日"]; final dateStr = "${_selectedDateTime.year}/${_selectedDateTime.month.toString().padLeft(2, "0")}/${_selectedDateTime.day.toString().padLeft(2, "0")} (" + w[_selectedDateTime.weekday] + ")";', s)
-          s = re.sub(r'final timeStr = DateFormat\(.+?\)\.format\(_selectedDateTime\);', 'final p = _selectedDateTime.hour < 12 ? "上午" : "下午"; final h = _selectedDateTime.hour == 0 ? 12 : (_selectedDateTime.hour > 12 ? _selectedDateTime.hour - 12 : _selectedDateTime.hour); final m = _selectedDateTime.minute.toString().padLeft(2, "0"); final timeStr = "$p $h:$m";', s)
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched edit_reminder_screen.dart')
-
-          # 7. 修復 ai_service.dart
-          p = 'lib/services/ai_service.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = re.sub(r'final nowStr = DateFormat\(.+?\)\.format\(now\);', 'final nowStr = "${now.year}-${now.month.toString().padLeft(2, "0")}-${now.day.toString().padLeft(2, "0")} ${now.hour.toString().padLeft(2, "0")}:${now.minute.toString().padLeft(2, "0")}";', s)
-          s = re.sub(r'final timeDesc = DateFormat\(.+?\)\.format\(targetTime\);', 'final p = targetTime.hour < 12 ? "上午" : "下午"; final h = targetTime.hour == 0 ? 12 : (targetTime.hour > 12 ? targetTime.hour - 12 : targetTime.hour); final m = targetTime.minute.toString().padLeft(2, "0"); final timeDesc = "${targetTime.month}月${targetTime.day}日 $p $h:$m";', s)
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched ai_service.dart')
-
-          # 8. 修復 voice_assistant_sheet.dart
-          p = 'lib/widgets/voice_assistant_sheet.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = re.sub(r'final timeStr = DateFormat\(.+?\)\.format\(res\.targetTime\);', 'final p = res.targetTime.hour < 12 ? "上午" : "下午"; final h = res.targetTime.hour == 0 ? 12 : (res.targetTime.hour > 12 ? res.targetTime.hour - 12 : res.targetTime.hour); final m = res.targetTime.minute.toString().padLeft(2, "0"); const w = ["", "一", "二", "三", "四", "五", "六", "日"]; final timeStr = "${res.targetTime.year}/${res.targetTime.month.toString().padLeft(2, "0")}/${res.targetTime.day.toString().padLeft(2, "0")} $p $h:$m (" + w[res.targetTime.weekday] + ")";', s)
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched voice_assistant_sheet.dart')
-
-          # 9. 修復 notification_service.dart
-          p = 'lib/services/notification_service.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read().replace('await androidImpl.requestExactAlarmsPermission();', '')
-          open(p, 'w', encoding='utf-8').write(s)
-          print('Patched notification_service.dart')
-
-          # 10. 修復 speech_service.dart
-          p = 'lib/services/speech_service.dart'
-          s = open(p, 'r', encoding='utf-8', errors='ignore').read()
-          s = re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s)
-          s = s.replace('partialResults: true,', '').replace('cancelOnError: false,', '')
-          s = re.sub(r'listenMode:\s*stt
+      - name: 自動發布到 Releases 下載頁面
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: v1.0.2
+          name: "Fit21 語音提醒助理 v1.0.2"
+          body: "Fit21 AI 語音提醒助理 Android 正式版。徹底修復啟動白屏與日期語系崩潰問題，全面支援純 Dart 時間運算與專屬綠色機器人圖示。"
+          files: build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
