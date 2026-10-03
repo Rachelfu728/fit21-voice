@@ -31,9 +31,11 @@ jobs:
           flutter create --platforms=android --org com.example --project-name voice_reminder_assistant .
           rm -rf lib test
 
-      - name: 解壓 Fit21 應用程式源碼
+      - name: 解壓 Fit21 應用程式源碼並修復相容性
         run: |
-          python3 -c "import os, zipfile, re; z=zipfile.ZipFile('fit21-voice-app.zip'); [(os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None, open(p, 'wb').write(z.read(m)), print('Extracted:', p)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and not p.startswith('android/')]; open('lib/services/speech_service.dart', 'w').write(re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', open('lib/services/speech_service.dart').read())) if os.path.exists('lib/services/speech_service.dart') else None"
+          python3 -c "import os, zipfile; z=zipfile.ZipFile('fit21-voice-app.zip'); [(os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None, open(p, 'wb').write(z.read(m)), print('Extracted:', p)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and not p.startswith('android/')]"
+          python3 -c "p='lib/main.dart'; s=open(p).read().replace('cardTheme: CardTheme(', 'cardTheme: CardThemeData('); open(p,'w').write(s); print('Patched main.dart CardThemeData')"
+          python3 -c "import re; p='lib/services/speech_service.dart'; s=open(p).read(); s=re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s); s=s.replace('partialResults: true,', '').replace('cancelOnError: false,', ''); s=re.sub(r'listenMode:\s*stt\.ListenMode\.\w+,?', '', s); open(p,'w').write(s); print('Patched speech_service.dart')"
 
       - name: 配置 Android 權限與建置參數
         run: |
