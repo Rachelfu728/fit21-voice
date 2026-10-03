@@ -28,7 +28,7 @@ jobs:
 
       - name: 解壓縮專案並修復檔案
         run: |
-          python3 -c "
+          python3 -c "import textwrap; exec(textwrap.dedent('''
           import os, zipfile
           if os.path.exists('fit21-voice-app.zip'):
               with zipfile.ZipFile('fit21-voice-app.zip', 'r') as z:
@@ -39,7 +39,9 @@ jobs:
                       if m.is_dir() or name.endswith('/'):
                           os.makedirs(name, exist_ok=True)
                       else:
-                          os.makedirs(os.path.dirname(name), exist_ok=True)
+                          parent = os.path.dirname(name)
+                          if parent:
+                              os.makedirs(parent, exist_ok=True)
                           with z.open(m) as src, open(name, 'wb') as dst:
                               dst.write(src.read())
 
@@ -58,7 +60,7 @@ jobs:
                       lines.append(line)
               with open(sp, 'w', encoding='utf-8') as f:
                   f.writelines(lines)
-          "
+          '''))"
 
       - name: 重建標準 Android 架構與設定
         run: |
@@ -74,7 +76,7 @@ jobs:
           cp -f /tmp/backup_fit21/pubspec.yaml pubspec.yaml
           if [ -d "/tmp/backup_fit21/assets" ]; then cp -rf /tmp/backup_fit21/assets/* assets/; fi
 
-          python3 -c "
+          python3 -c "import textwrap; exec(textwrap.dedent('''
           import os, re, glob, shutil
 
           for g in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
@@ -97,36 +99,7 @@ jobs:
           if os.path.exists(manifest):
               m = open(manifest, 'r', encoding='utf-8').read()
               perms = ['INTERNET', 'RECORD_AUDIO', 'POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'RECEIVE_BOOT_COMPLETED', 'VIBRATE', 'WAKE_LOCK']
-              tag_lines = '\n' + '\n'.join([f'    <uses-permission android:name=\"android.permission.{p}\" />' for p in perms]) + '\n'
+              tag_lines = '\n' + '\n'.join(['    <uses-permission android:name=\"android.permission.' + p + '\" />' for p in perms]) + '\n'
               if 'RECORD_AUDIO' not in m:
                   m = m.replace('<manifest', '<manifest' + tag_lines, 1)
-              m = re.sub(r'android:label=\"[^\"]*\"', 'android:label=\"Fit21 語音提醒\"', m)
-              open(manifest, 'w', encoding='utf-8').write(m)
-
-          if os.path.exists('assets/images/app_logo.png'):
-              for d in glob.glob('android/app/src/main/res/mipmap-*'):
-                  shutil.copy('assets/images/app_logo.png', os.path.join(d, 'ic_launcher.png'))
-          "
-
-      - name: 下載依賴套件
-        run: flutter pub get
-
-      - name: 打包 Android 安裝檔 (APK)
-        run: flutter build apk --release
-
-      - name: 產出可下載的 APK 安裝檔
-        uses: actions/upload-artifact@v4
-        with:
-          name: Fit21-語音助理-安裝檔
-          path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: 自動發布到 Releases 下載頁面
-        uses: softprops/action-gh-release@v2
-        continue-on-error: true
-        with:
-          tag_name: v1.0.0
-          name: "Fit21 語音提醒助理 v1.0.0"
-          body: "Fit21 AI 語音提醒助理 Android 安裝檔。點擊下方 app-release.apk 即可下載並安裝到手機！"
-          files: build/app/outputs/flutter-apk/app-release.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              m = re.sub(r'android:label=\"[^\"]*\"', 'android:
