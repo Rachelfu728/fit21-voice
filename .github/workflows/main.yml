@@ -26,31 +26,28 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 解壓縮專案並修復路徑結構
+      - name: 解壓縮專案並修復檔案
         run: |
           python3 -c "
           import os, zipfile
-
-          zip_name = 'fit21-voice-app.zip'
-          if os.path.exists(zip_name):
-              with zipfile.ZipFile(zip_name, 'r') as zf:
-                  for member in zf.infolist():
-                      clean_name = member.filename.replace(chr(92), '/').strip('/')
-                      if not clean_name:
+          if os.path.exists('fit21-voice-app.zip'):
+              with zipfile.ZipFile('fit21-voice-app.zip', 'r') as z:
+                  for m in z.infolist():
+                      name = m.filename.replace(chr(92), '/').strip('/')
+                      if not name:
                           continue
-                      if member.is_dir() or clean_name.endswith('/'):
-                          os.makedirs(clean_name, exist_ok=True)
+                      if m.is_dir() or name.endswith('/'):
+                          os.makedirs(name, exist_ok=True)
                       else:
-                          os.makedirs(os.path.dirname(clean_name), exist_ok=True)
-                          with zf.open(member) as src, open(clean_name, 'wb') as dst:
+                          os.makedirs(os.path.dirname(name), exist_ok=True)
+                          with z.open(m) as src, open(name, 'wb') as dst:
                               dst.write(src.read())
-              print('Zip extracted successfully.')
 
-          speech_file = 'lib/services/speech_service.dart'
-          if os.path.exists(speech_file):
+          sp = 'lib/services/speech_service.dart'
+          if os.path.exists(sp):
               lines = []
               skip = False
-              with open(speech_file, 'r', encoding='utf-8', errors='ignore') as f:
+              with open(sp, 'r', encoding='utf-8', errors='ignore') as f:
                   for line in f:
                       if 'setIosAudioCategory' in line or 'IosTextToSpeechAudioCategory' in line:
                           skip = True
@@ -59,9 +56,8 @@ jobs:
                               skip = False
                           continue
                       lines.append(line)
-              with open(speech_file, 'w', encoding='utf-8') as f:
+              with open(sp, 'w', encoding='utf-8') as f:
                   f.writelines(lines)
-              print('speech_service.dart checked and cleaned.')
           "
 
       - name: 重建標準 Android 架構與設定
@@ -81,21 +77,18 @@ jobs:
           python3 -c "
           import os, re, glob, shutil
 
-          for gradle_file in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
-              if os.path.exists(gradle_file):
-                  c = open(gradle_file, 'r', encoding='utf-8').read()
+          for g in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              if os.path.exists(g):
+                  c = open(g, 'r', encoding='utf-8').read()
                   c = re.sub(r'minSdkVersion\s+.*', 'minSdkVersion 26', c)
                   c = re.sub(r'minSdkVersion\s*=.*', 'minSdkVersion = 26', c)
                   c = re.sub(r'minSdk\s*=.*', 'minSdk = 26', c)
                   c = re.sub(r'minSdk\s+.*', 'minSdk 26', c)
-                  
                   if 'coreLibraryDesugaringEnabled' not in c and 'isCoreLibraryDesugaringEnabled' not in c:
                       c = re.sub(r'(compileOptions\s*\{)', r'\1\n        coreLibraryDesugaringEnabled true', c)
-                  
                   if 'coreLibraryDesugaring' not in c:
                       c += '\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n'
-                  
-                  open(gradle_file, 'w', encoding='utf-8').write(c)
+                  open(g, 'w', encoding='utf-8').write(c)
 
           with open('android/local.properties', 'a') as f:
               f.write('\nflutter.minSdkVersion=26\n')
@@ -103,18 +96,10 @@ jobs:
           manifest = 'android/app/src/main/AndroidManifest.xml'
           if os.path.exists(manifest):
               m = open(manifest, 'r', encoding='utf-8').read()
-              perms = '''
-    <uses-permission android:name=\"android.permission.INTERNET\" />
-    <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />
-    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />
-    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" />
-    <uses-permission android:name=\"android.permission.USE_EXACT_ALARM\" />
-    <uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\" />
-    <uses-permission android:name=\"android.permission.VIBRATE\" />
-    <uses-permission android:name=\"android.permission.WAKE_LOCK\" />
-'''
+              perms = ['INTERNET', 'RECORD_AUDIO', 'POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'RECEIVE_BOOT_COMPLETED', 'VIBRATE', 'WAKE_LOCK']
+              tag_lines = '\n' + '\n'.join([f'    <uses-permission android:name=\"android.permission.{p}\" />' for p in perms]) + '\n'
               if 'RECORD_AUDIO' not in m:
-                  m = m.replace('<manifest', '<manifest\n' + perms, 1)
+                  m = m.replace('<manifest', '<manifest' + tag_lines, 1)
               m = re.sub(r'android:label=\"[^\"]*\"', 'android:label=\"Fit21 語音提醒\"', m)
               open(manifest, 'w', encoding='utf-8').write(m)
 
