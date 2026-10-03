@@ -37,7 +37,7 @@ jobs:
           cp -rf /tmp/bak/lib/* lib/ 2>/dev/null || true
           cp -f /tmp/bak/pubspec.yaml pubspec.yaml || true
           echo "flutter.minSdkVersion=26" >> android/local.properties || true
-          python3 -c "p='android/app/build.gradle'; s=open(p).read(); s=s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26'); s=s.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true') if 'coreLibraryDesugaring' not in s else s; s+='\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'coreLibraryDesugaring' not in s else ''; open(p,'w').write(s)" || true
+          python3 -c "import os; p='android/app/build.gradle' if os.path.exists('android/app/build.gradle') else ('android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else ''); s=open(p).read() if p else ''; (open(p,'w').write(s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26').replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true' if 'kts' not in p else 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true') + ('\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'kts' not in p else '\ndependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.4\")\n}\n'))) if p else None" || true
           python3 -c "p='android/app/src/main/AndroidManifest.xml'; s=open(p).read(); perms='<uses-permission android:name=\"android.permission.INTERNET\"/>\n<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n<uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.USE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>\n<uses-permission android:name=\"android.permission.VIBRATE\"/>\n<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>'; open(p,'w').write(s.replace('<application', perms+'\n<application')) if 'RECORD_AUDIO' not in s else None" || true
           sed -i 's/android:label="[^"]*"/android:label="Fit21"/g' android/app/src/main/AndroidManifest.xml || true
           for d in android/app/src/main/res/mipmap-*; do cp assets/images/app_logo.png "$d/ic_launcher.png" 2>/dev/null || true; done
@@ -45,7 +45,7 @@ jobs:
       - name: 下載依賴並打包 APK
         run: |
           flutter pub get
-          flutter build apk --release
+          flutter build apk --release --no-tree-shake-icons
 
       - name: 產出可下載的 APK 安裝檔
         uses: actions/upload-artifact@v4
