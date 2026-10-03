@@ -25,17 +25,19 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: 解壓縮專案並修復相容性
+      - name: 初始化 Android 專案基礎架構
         run: |
-          python3 -c "import os, zipfile, re; z=zipfile.ZipFile('fit21-voice-app.zip'); [open(p, 'wb').write(z.read(m)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and (os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else True)]; open('lib/services/speech_service.dart', 'w').write(re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', open('lib/services/speech_service.dart').read())) if os.path.exists('lib/services/speech_service.dart') else None"
-
-      - name: 重建 Android 環境並配置
-        run: |
-          mkdir -p /tmp/bak && cp -r lib pubspec.yaml /tmp/bak/ || true
-          rm -rf android
+          rm -rf android lib test
           flutter create --platforms=android --org com.example --project-name voice_reminder_assistant .
-          cp -rf /tmp/bak/lib/* lib/ 2>/dev/null || true
-          cp -f /tmp/bak/pubspec.yaml pubspec.yaml || true
+          rm -rf lib test
+
+      - name: 解壓 Fit21 應用程式源碼
+        run: |
+          python3 -c "import os, zipfile; z=zipfile.ZipFile('fit21-voice-app.zip'); [open(p, 'wb').write(z.read(m)) for m in z.infolist() for p in [m.filename.replace(chr(92), '/')] if not p.endswith('/') and not p.startswith('android/') and (os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else True)]"
+          python3 -c "import os, re; p='lib/services/speech_service.dart'; open(p, 'w').write(re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', open(p).read())) if os.path.exists(p) else None"
+
+      - name: 配置 Android 權限與建置參數
+        run: |
           echo "flutter.minSdkVersion=26" >> android/local.properties || true
           python3 -c "import os; p='android/app/build.gradle' if os.path.exists('android/app/build.gradle') else ('android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else ''); s=open(p).read() if p else ''; (open(p,'w').write(s.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 26').replace('minSdk = flutter.minSdkVersion', 'minSdk = 26').replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true' if 'kts' not in p else 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true') + ('\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n' if 'kts' not in p else '\ndependencies {\n    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.4\")\n}\n'))) if p else None" || true
           python3 -c "p='android/app/src/main/AndroidManifest.xml'; s=open(p).read(); perms='<uses-permission android:name=\"android.permission.INTERNET\"/>\n<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n<uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.USE_EXACT_ALARM\"/>\n<uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\"/>\n<uses-permission android:name=\"android.permission.VIBRATE\"/>\n<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>'; open(p,'w').write(s.replace('<application', perms+'\n<application')) if 'RECORD_AUDIO' not in s else None" || true
