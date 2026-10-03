@@ -14,11 +14,6 @@ jobs:
       - name: 下載專案檔案
         uses: actions/checkout@v4
 
-      - name: 解壓縮專案並修復相容性
-        run: |
-          python3 -c "import zipfile; zipfile.ZipFile('fit21-voice-app.zip').extractall('.')" || tar -xf fit21-voice-app.zip || unzip -o fit21-voice-app.zip || true
-          python3 -c "import re; p='lib/services/speech_service.dart'; s=open(p).read(); s=re.sub(r'// iOS[\s\S]*?\);', '', s); s=re.sub(r'await _tts\.setIosAudioCategory[\s\S]*?\);', '', s); open(p,'w').write(s)" || true
-
       - name: 設定 Java 環境
         uses: actions/setup-java@v4
         with:
@@ -29,30 +24,110 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          cache: true
 
-      - name: 重建標準 Android 架構與相容設定
+      - name: 解壓縮專案並修復路徑結構
         run: |
+          python3 -c "
+          import os, zipfile
+
+          zip_name = 'fit21-voice-app.zip'
+          if os.path.exists(zip_name):
+              with zipfile.ZipFile(zip_name, 'r') as zf:
+                  for member in zf.infolist():
+                      clean_name = member.filename.replace(chr(92), '/').strip('/')
+                      if not clean_name:
+                          continue
+                      if member.is_dir() or clean_name.endswith('/'):
+                          os.makedirs(clean_name, exist_ok=True)
+                      else:
+                          os.makedirs(os.path.dirname(clean_name), exist_ok=True)
+                          with zf.open(member) as src, open(clean_name, 'wb') as dst:
+                              dst.write(src.read())
+              print('Zip extracted successfully.')
+
+          speech_file = 'lib/services/speech_service.dart'
+          if os.path.exists(speech_file):
+              lines = []
+              skip = False
+              with open(speech_file, 'r', encoding='utf-8', errors='ignore') as f:
+                  for line in f:
+                      if 'setIosAudioCategory' in line or 'IosTextToSpeechAudioCategory' in line:
+                          skip = True
+                      if skip:
+                          if ');' in line:
+                              skip = False
+                          continue
+                      lines.append(line)
+              with open(speech_file, 'w', encoding='utf-8') as f:
+                  f.writelines(lines)
+              print('speech_service.dart checked and cleaned.')
+          "
+
+      - name: 重建標準 Android 架構與設定
+        run: |
+          mkdir -p /tmp/backup_fit21
+          cp -r lib /tmp/backup_fit21/
+          cp pubspec.yaml /tmp/backup_fit21/
+          if [ -d "assets" ]; then cp -r assets /tmp/backup_fit21/; fi
+
           rm -rf android
           flutter create --platforms=android --org com.example .
+
+          cp -rf /tmp/backup_fit21/lib/* lib/
+          cp -f /tmp/backup_fit21/pubspec.yaml pubspec.yaml
+          if [ -d "/tmp/backup_fit21/assets" ]; then cp -rf /tmp/backup_fit21/assets/* assets/; fi
+
           python3 -c "
-          p = 'android/app/build.gradle'
-          c = open(p).read()
-          c = c.replace('minSdk = flutter.minSdkVersion', 'minSdk = 23')
-          c = c.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 23')
-          if 'coreLibraryDesugaringEnabled' not in c:
-              c = c.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true')
-              c += '\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.0.4\"\n}\n'
-          open(p, 'w').write(c)
-          " || true
-          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />' android/app/src/main/AndroidManifest.xml || true
-          python3 -c "import shutil, glob, os; [shutil.copy('assets/images/app_logo.png', os.path.join(d, 'ic_launcher.png')) for d in glob.glob('android/app/src/main/res/mipmap-*')]" || true
+          import os, re, glob, shutil
+
+          for gradle_file in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              if os.path.exists(gradle_file):
+                  c = open(gradle_file, 'r', encoding='utf-8').read()
+                  c = re.sub(r'minSdkVersion\s+.*', 'minSdkVersion 26', c)
+                  c = re.sub(r'minSdkVersion\s*=.*', 'minSdkVersion = 26', c)
+                  c = re.sub(r'minSdk\s*=.*', 'minSdk = 26', c)
+                  c = re.sub(r'minSdk\s+.*', 'minSdk 26', c)
+                  
+                  if 'coreLibraryDesugaringEnabled' not in c and 'isCoreLibraryDesugaringEnabled' not in c:
+                      c = re.sub(r'(compileOptions\s*\{)', r'\1\n        coreLibraryDesugaringEnabled true', c)
+                  
+                  if 'coreLibraryDesugaring' not in c:
+                      c += '\ndependencies {\n    coreLibraryDesugaring \"com.android.tools:desugar_jdk_libs:2.1.4\"\n}\n'
+                  
+                  open(gradle_file, 'w', encoding='utf-8').write(c)
+
+          with open('android/local.properties', 'a') as f:
+              f.write('\nflutter.minSdkVersion=26\n')
+
+          manifest = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(manifest):
+              m = open(manifest, 'r', encoding='utf-8').read()
+              perms = '''
+    <uses-permission android:name=\"android.permission.INTERNET\" />
+    <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />
+    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />
+    <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" />
+    <uses-permission android:name=\"android.permission.USE_EXACT_ALARM\" />
+    <uses-permission android:name=\"android.permission.RECEIVE_BOOT_COMPLETED\" />
+    <uses-permission android:name=\"android.permission.VIBRATE\" />
+    <uses-permission android:name=\"android.permission.WAKE_LOCK\" />
+'''
+              if 'RECORD_AUDIO' not in m:
+                  m = m.replace('<manifest', '<manifest\n' + perms, 1)
+              m = re.sub(r'android:label=\"[^\"]*\"', 'android:label=\"Fit21 語音提醒\"', m)
+              open(manifest, 'w', encoding='utf-8').write(m)
+
+          if os.path.exists('assets/images/app_logo.png'):
+              for d in glob.glob('android/app/src/main/res/mipmap-*'):
+                  shutil.copy('assets/images/app_logo.png', os.path.join(d, 'ic_launcher.png'))
+          "
 
       - name: 下載依賴套件
         run: flutter pub get
 
       - name: 打包 Android 安裝檔 (APK)
-        run: |
-          flutter build apk --release --verbose > build.log 2>&1 || (cat build.log | tail -n 80 && exit 1)
+        run: flutter build apk --release
 
       - name: 產出可下載的 APK 安裝檔
         uses: actions/upload-artifact@v4
@@ -62,10 +137,11 @@ jobs:
 
       - name: 自動發布到 Releases 下載頁面
         uses: softprops/action-gh-release@v2
+        continue-on-error: true
         with:
           tag_name: v1.0.0
-          name: "Fit21 語音提醒助理 v1.0.0 (安裝包)"
-          body: "Fit21 AI 語音提醒助理 Android 安裝檔。下載下方 app-release.apk 即可安裝到手機！"
+          name: "Fit21 語音提醒助理 v1.0.0"
+          body: "Fit21 AI 語音提醒助理 Android 安裝檔。點擊下方 app-release.apk 即可下載並安裝到手機！"
           files: build/app/outputs/flutter-apk/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
