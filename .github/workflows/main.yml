@@ -60,7 +60,7 @@ jobs:
               return digits[s] ?? 0;
             }
 
-            /// 本機智慧規則解析器 (支援中文數字、繁體時段與語音自然語意推斷)
+            /// 本機智慧規則解析器 (支援幾月幾號、星期幾、中文數字、時段與自然語意)
             AIParseResult _parseWithLocalRules(String rawText) {
               final now = DateTime.now();
               DateTime targetTime = now;
@@ -71,6 +71,7 @@ jobs:
               text = text.replaceAll('今晚', '今天晚上').replaceAll('明晚', '明天晚上').replaceAll('明早', '明天早上');
               text = text.replaceAllMapped(RegExp(r'([0-9一二兩三四五六七八九十]+)\s*(?:點|時)半'), (m) => '${m.group(1)}點30分');
 
+              // 1. 偵測相對分鐘
               final minMatch = RegExp(r'([0-9一二兩三四五六七八九十]+)\s*(?:個)?分鐘後').firstMatch(text);
               if (minMatch != null) {
                 final mins = _cnToInt(minMatch.group(1)!);
@@ -78,6 +79,7 @@ jobs:
                 timeDetected = true;
               }
 
+              // 2. 偵測相對小時
               final hourMatch = RegExp(r'([0-9一二兩三四五六七八九十]+)\s*(?:個)?小時後').firstMatch(text);
               if (!timeDetected && hourMatch != null) {
                 final hours = _cnToInt(hourMatch.group(1)!);
@@ -85,7 +87,52 @@ jobs:
                 timeDetected = true;
               }
 
-              int dayOffset = 0;
+              // 3. 偵測「幾月幾號 / 幾月幾日」或「幾號」 (例如 10月12號, 10月12後, 12號)
+              DateTime? specificDate;
+              final dateMatch = RegExp(r'(?:([0-9一二兩三四五六七八九十]+)\s*月\s*([0-9一二兩三四五六七八九十]+)\s*(?:日|號|號後|日後|後)?)|(?:([0-9一二兩三四五六七八九十]+)\s*(?:日|號|號後|日後))').firstMatch(text);
+              if (dateMatch != null) {
+                int month = now.month;
+                if (dateMatch.group(1) != null) {
+                  month = _cnToInt(dateMatch.group(1)!);
+                }
+                final dayStr = dateMatch.group(2) ?? dateMatch.group(3)!;
+                final day = _cnToInt(dayStr);
+                var year = now.year;
+
+                if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+                  if (dateMatch.group(1) == null && day < now.day) {
+                    final nextM = DateTime(year, month + 1, 1);
+                    year = nextM.year;
+                    month = nextM.month;
+                  } else if (dateMatch.group(1) != null && (month < now.month || (month == now.month && day < now.day))) {
+                    year += 1;
+                  }
+                  try {
+                    specificDate = DateTime(year, month, day);
+                  } catch (_) {}
+                }
+              }
+
+              // 4. 偵測「星期幾 / 禮拜幾 / 週幾」
+              if (specificDate == null) {
+                final weekMatch = RegExp(r'(下|這)?\s*(?:週|星期|禮拜)\s*([一二三四五六日天7])').firstMatch(text);
+                if (weekMatch != null) {
+                  const wMap = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7, '7': 7};
+                  final targetW = wMap[weekMatch.group(2)] ?? 1;
+                  var currentW = now.weekday;
+                  var diff = targetW - currentW;
+                  if (weekMatch.group(1) == '下') {
+                    diff += 7;
+                  } else if (diff <= 0) {
+                    diff += 7;
+                  }
+                  final d = now.add(Duration(days: diff));
+                  specificDate = DateTime(d.year, d.month, d.day);
+                }
+              }
+
+              // 5. 偵測相對日期 ("明天", "後天", "大後天", "今天")
+              int dayOffset = -1;
               if (text.contains('大後天')) {
                 dayOffset = 3;
               } else if (text.contains('後天')) {
@@ -96,12 +143,14 @@ jobs:
                 dayOffset = 0;
               }
 
+              // 6. 偵測具體時刻
               final timeRegex = RegExp(r'(清晨|凌晨|早晨|早上|上午|中午|下午|傍晚|晚上)?\s*([0-9一二兩三四五六七八九十]+)\s*(?:點|:|時)\s*(?:([0-9一二兩三四五六七八九十]+)(?:分)?)?');
               final match = timeRegex.firstMatch(text);
 
-              if (!timeDetected && (dayOffset > 0 || match != null)) {
-                int hour = 9;
+              if (!timeDetected && (specificDate != null || dayOffset >= 0 || match != null)) {
+                int hour = 9; // 若指定日期但未說具體時間，預設上午 9:00
                 int minute = 0;
+                bool hourExplicitlySet = false;
 
                 if (match != null) {
                   final period = match.group(1);
@@ -124,12 +173,21 @@ jobs:
                     }
                   }
                   hour = parsedHour;
+                  hourExplicitlySet = true;
                 }
 
-                var date = now.add(Duration(days: dayOffset));
+                DateTime date;
+                if (specificDate != null) {
+                  date = specificDate;
+                } else if (dayOffset >= 0) {
+                  date = now.add(Duration(days: dayOffset));
+                } else {
+                  date = now;
+                }
+
                 targetTime = DateTime(date.year, date.month, date.day, hour, minute);
 
-                if (dayOffset == 0 && targetTime.isBefore(now)) {
+                if (specificDate == null && dayOffset <= 0 && targetTime.isBefore(now) && hourExplicitlySet) {
                   targetTime = targetTime.add(const Duration(days: 1));
                 }
                 timeDetected = true;
@@ -139,25 +197,29 @@ jobs:
                 targetTime = now.add(const Duration(hours: 1));
               }
 
+              // 7. 清理事項標題
               String cleanTitle = text
-                  .replaceAll(RegExp(r'(提醒我|幫我記一下|幫我記|記得要|記得|要|我想記|請提醒我|請幫我|請記得)'), '')
+                  .replaceAll(RegExp(r'^(提醒我|幫我記一下|幫我記|記得要|記得|要|我想記|請提醒我|請幫我|請記得)\s*'), '')
+                  .replaceAll(RegExp(r'(?:[0-9一二兩三四五六七八九十]+\s*月\s*[0-9一二兩三四五六七八九十]+\s*(?:日|號|號後|日後|後)?)|(?:[0-9一二兩三四五六七八九十]+\s*(?:日|號|號後|日後))'), '')
+                  .replaceAll(RegExp(r'(下|這)?\s*(?:週|星期|禮拜)\s*[一二三四五六日天7]'), '')
                   .replaceAll(RegExp(r'(今天|明天|後天|大後天|今晚|明晚|明早)'), '')
                   .replaceAll(RegExp(r'(清晨|凌晨|早晨|早上|上午|中午|下午|傍晚|晚上)?\s*[0-9一二兩三四五六七八九十]+\s*(?:點|:|時)(?:[0-9一二兩三四五六七八九十]+)?(?:分)?'), '')
                   .replaceAll(RegExp(r'[0-9一二兩三四五六七八九十]+\s*(?:個)?(?:分鐘|小時)後'), '')
                   .replaceAll(RegExp(r'(的事情|的代辦|的待辦|提醒|記得)'), '')
+                  .replaceAll(RegExp(r'^(去|要|來|去提醒|去記得|去停止|後去|後要)\s*'), '')
                   .replaceAll(RegExp(r'^[，,、\s]+|[，,、\s]+$'), '')
                   .trim();
 
               if (cleanTitle.isEmpty) cleanTitle = rawText.trim();
 
               String category = 'other';
-              if (cleanTitle.contains('會') || cleanTitle.contains('工作') || cleanTitle.contains('報告') || cleanTitle.contains('專案') || cleanTitle.contains('客戶') || cleanTitle.contains('主管')) {
+              if (cleanTitle.contains('會') || cleanTitle.contains('工作') || cleanTitle.contains('報告') || cleanTitle.contains('專案') || cleanTitle.contains('客戶') || cleanTitle.contains('主管') || cleanTitle.contains('課程') || cleanTitle.contains('學習')) {
                 category = 'work';
               } else if (cleanTitle.contains('買') || cleanTitle.contains('繳費') || cleanTitle.contains('拿') || cleanTitle.contains('回家') || cleanTitle.contains('吃飯') || cleanTitle.contains('超市')) {
                 category = 'life';
               } else if (cleanTitle.contains('吃藥') || cleanTitle.contains('看醫生') || cleanTitle.contains('診所') || cleanTitle.contains('運動') || cleanTitle.contains('跑步') || cleanTitle.contains('喝水')) {
                 category = 'health';
-              } else if (cleanTitle.contains('緊急') || cleanTitle.contains('立刻') || cleanTitle.contains('重要') || cleanTitle.contains('馬上') || cleanTitle.contains('火速')) {
+              } else if (cleanTitle.contains('緊急') || cleanTitle.contains('立刻') || cleanTitle.contains('重要') || cleanTitle.contains('馬上') || cleanTitle.contains('火速') || cleanTitle.contains('停止')) {
                 category = 'urgent';
               }
 
@@ -213,9 +275,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         continue-on-error: true
         with:
-          tag_name: v1.0.7
-          name: "Fit21 語音提醒助理 v1.0.7 (真AI智能繁中語音理解版)"
-          body: "Fit21 語音提醒助理 v1.0.7 正式發布！全面升級中文語音時間解析引擎：\n1. 支援中文數字（例如「下午三點」、「明天早上八點」、「晚上七點半」），時間 100% 精準無誤！\n2. 智能日常時間推斷（說「3點開會」自動設定為下午 15:00，不再亂跳到凌晨！）\n3. 核心事項智慧提煉，自動剔除贅詞雜訊！\n4. 延續 v1.0.6 秒速刪除與完成即時歸檔功能！"
+          tag_name: v1.0.8
+          name: "Fit21 語音提醒助理 v1.0.8 (真萬年曆與月日日期理解版)"
+          body: "Fit21 語音提醒助理 v1.0.8 正式發布！全面支援完整月日與星期日期理解：\n1. 支援「幾月幾號 / 幾月幾日 / 幾號」（例如「10月12號去停止大師課程」），精準設定為 10月12日 09:00！\n2. 支援「星期幾 / 禮拜幾 / 下週幾」（例如「下週一早上開會」）！\n3. 支援全中文數字與時段推斷（「下午三點」、「十分鐘後」）！\n4. 事項標題智慧過濾雜訊，自動提煉最乾淨的事項！\n5. 延續 0 秒完成即時歸檔與 0 秒秒速刪除！"
           files: build/app/outputs/flutter-apk/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
